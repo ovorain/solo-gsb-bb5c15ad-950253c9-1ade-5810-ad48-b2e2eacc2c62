@@ -130,6 +130,49 @@ def compute_grid(voices: list[dict]) -> list[dict]:
     return segments
 
 
+def find_rhythm_match(
+    source_events: list[dict], candidate_events: list[dict]
+) -> dict | None:
+    """Check whether a candidate voice is a cyclic re-tempo of a source.
+
+    Each list holds built events with exact ``Fraction`` durations. The
+    rhythms are considered equivalent when both sequences contain the
+    same number N of events and some cyclic shift ``s`` in [0, N) makes,
+    for every j, the candidate's j-th event correspond to the source's
+    (j + s) mod N-th event:
+
+    * the sound/rest kinds agree one by one, and
+    * every candidate/source duration ratio equals the same positive
+      rational (a uniform re-tempo, possibly by 1).
+
+    Ratios are compared exactly with Fractions. Returns
+    ``{"ratio": Fraction, "shift": int}`` for the smallest feasible
+    shift (shifts are tried from 0 upward), or ``None`` when no shift
+    works (including event-count mismatches).
+    """
+    count = len(source_events)
+    if count == 0 or count != len(candidate_events):
+        return None
+
+    source_kinds = [event["kind"] for event in source_events]
+    candidate_kinds = [event["kind"] for event in candidate_events]
+    source_durations = [event["duration"] for event in source_events]
+    candidate_durations = [event["duration"] for event in candidate_events]
+
+    for shift in range(count):
+        # Event durations are stored positive, so this ratio is positive.
+        ratio = candidate_durations[0] / source_durations[shift]
+        for j in range(count):
+            source_index = (j + shift) % count
+            if candidate_kinds[j] != source_kinds[source_index]:
+                break
+            if candidate_durations[j] != ratio * source_durations[source_index]:
+                break
+        else:
+            return {"ratio": ratio, "shift": shift}
+    return None
+
+
 def rational_lcm(left: Fraction, right: Fraction) -> Fraction:
     """Least positive common multiple of two positive rationals.
 

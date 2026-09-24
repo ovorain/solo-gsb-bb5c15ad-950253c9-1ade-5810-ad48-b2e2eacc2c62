@@ -10,6 +10,7 @@ from app.grid import (
     align_loops,
     build_voice_events,
     compute_grid,
+    find_rhythm_match,
     format_rational,
     parse_rational,
     rational_lcm,
@@ -231,6 +232,95 @@ class AlignLoopsTest(unittest.TestCase):
         self.assertEqual((error.repetitions_a, error.repetitions_b), (5, 3))
         self.assertEqual(error.expanded_events, 8)
         self.assertEqual(error.max_events, 7)
+
+
+class FindRhythmMatchTest(unittest.TestCase):
+    def make_events(self, spec):
+        # spec: list of (kind, duration_str); voice index is irrelevant.
+        return build_voice_events(
+            0,
+            [
+                {"kind": kind, "duration": parse_rational(duration)}
+                for kind, duration in spec
+            ],
+        )
+
+    def test_identical_rhythm_matches_ratio_one_shift_zero(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_REST, "1/4"), (KIND_SOUND, "1/4")]
+        )
+        match = find_rhythm_match(source, source)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["ratio"], Fraction(1))
+        self.assertEqual(match["shift"], 0)
+
+    def test_uniform_retempo_matches_with_common_ratio(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/3"), (KIND_REST, "1/3"), (KIND_SOUND, "1/3")]
+        )
+        # Every duration doubled.
+        candidate = self.make_events(
+            [(KIND_SOUND, "2/3"), (KIND_REST, "2/3"), (KIND_SOUND, "2/3")]
+        )
+        match = find_rhythm_match(source, candidate)
+        self.assertEqual(match, {"ratio": Fraction(2), "shift": 0})
+
+    def test_non_unit_fraction_ratio_is_exact(self):
+        # Ratios like 3/2 must not be reduced through floating point.
+        source = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_REST, "1/6"), (KIND_SOUND, "1/3")]
+        )
+        candidate = self.make_events(
+            [(KIND_SOUND, "3/4"), (KIND_REST, "1/4"), (KIND_SOUND, "1/2")]
+        )
+        match = find_rhythm_match(source, candidate)
+        self.assertEqual(match, {"ratio": Fraction(3, 2), "shift": 0})
+
+    def test_cyclic_shift_matches(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/4"), (KIND_REST, "1/4"), (KIND_SOUND, "1/2")]
+        )
+        # Candidate event j = source event (j + 2) mod 3, same durations.
+        candidate = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_SOUND, "1/4"), (KIND_REST, "1/4")]
+        )
+        match = find_rhythm_match(source, candidate)
+        self.assertEqual(match, {"ratio": Fraction(1), "shift": 2})
+
+    def test_smallest_shift_is_chosen(self):
+        # A uniform rhythm (all durations equal) with all events of the
+        # same kind matches at every shift: 0 must win.
+        source = self.make_events([(KIND_SOUND, "1/4")] * 4)
+        candidate = self.make_events([(KIND_SOUND, "1/2")] * 4)
+        match = find_rhythm_match(source, candidate)
+        self.assertEqual(match, {"ratio": Fraction(2), "shift": 0})
+
+    def test_kind_mismatch_anywhere_fails(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_REST, "1/2")]
+        )
+        candidate = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_SOUND, "1/2")]
+        )
+        self.assertIsNone(find_rhythm_match(source, candidate))
+
+    def test_different_event_counts_fail(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/3"), (KIND_REST, "2/3")]
+        )
+        candidate = self.make_events(
+            [(KIND_SOUND, "1/3"), (KIND_REST, "1/3"), (KIND_REST, "1/3")]
+        )
+        self.assertIsNone(find_rhythm_match(source, candidate))
+
+    def test_non_uniform_ratios_fail(self):
+        source = self.make_events(
+            [(KIND_SOUND, "1/2"), (KIND_REST, "1/2")]
+        )
+        candidate = self.make_events(
+            [(KIND_SOUND, "1/4"), (KIND_REST, "3/4")]
+        )
+        self.assertIsNone(find_rhythm_match(source, candidate))
 
 
 if __name__ == "__main__":

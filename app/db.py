@@ -102,6 +102,43 @@ def insert_measure(target: str, voices: list[dict]) -> int:
         return measure_id
 
 
+def _load_measure_row(conn: sqlite3.Connection, measure: sqlite3.Row) -> dict:
+    """Build a measure dict (voices + events, ordered by position)."""
+    voices = conn.execute(
+        "SELECT id, name, position FROM voices "
+        "WHERE measure_id = ? ORDER BY position",
+        (measure["id"],),
+    ).fetchall()
+    result_voices = []
+    for voice in voices:
+        events = conn.execute(
+            "SELECT event_key, kind, duration, start_offset, end_offset "
+            "FROM events WHERE voice_id = ? ORDER BY position",
+            (voice["id"],),
+        ).fetchall()
+        result_voices.append(
+            {
+                "name": voice["name"],
+                "events": [
+                    {
+                        "id": event["event_key"],
+                        "kind": event["kind"],
+                        "duration": event["duration"],
+                        "start": event["start_offset"],
+                        "end": event["end_offset"],
+                    }
+                    for event in events
+                ],
+            }
+        )
+    return {
+        "id": measure["id"],
+        "target_duration": measure["target_duration"],
+        "created_at": measure["created_at"],
+        "voices": result_voices,
+    }
+
+
 def load_measure(measure_id: int) -> dict | None:
     """Load a measure with voices and events, ordered by position."""
     with closing(connect()) as conn:
@@ -111,36 +148,13 @@ def load_measure(measure_id: int) -> dict | None:
         ).fetchone()
         if measure is None:
             return None
-        voices = conn.execute(
-            "SELECT id, name, position FROM voices "
-            "WHERE measure_id = ? ORDER BY position",
-            (measure_id,),
+        return _load_measure_row(conn, measure)
+
+
+def load_all_measures() -> list[dict]:
+    """Load every saved measure (and its voices), ordered by measure id."""
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, target_duration, created_at FROM measures ORDER BY id"
         ).fetchall()
-        result_voices = []
-        for voice in voices:
-            events = conn.execute(
-                "SELECT event_key, kind, duration, start_offset, end_offset "
-                "FROM events WHERE voice_id = ? ORDER BY position",
-                (voice["id"],),
-            ).fetchall()
-            result_voices.append(
-                {
-                    "name": voice["name"],
-                    "events": [
-                        {
-                            "id": event["event_key"],
-                            "kind": event["kind"],
-                            "duration": event["duration"],
-                            "start": event["start_offset"],
-                            "end": event["end_offset"],
-                        }
-                        for event in events
-                    ],
-                }
-            )
-        return {
-            "id": measure["id"],
-            "target_duration": measure["target_duration"],
-            "created_at": measure["created_at"],
-            "voices": result_voices,
-        }
+        return [_load_measure_row(conn, row) for row in rows]

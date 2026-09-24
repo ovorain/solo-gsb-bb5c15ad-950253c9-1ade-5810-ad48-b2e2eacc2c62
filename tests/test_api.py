@@ -305,3 +305,130 @@ def test_loop_alignment_over_expansion_limit_returns_422_without_timeline():
     # No truncated timeline is output.
     assert "segments" not in detail
     assert "segments" not in response.text
+
+
+# --- GET /measures/{id}/rhythm-matches -------------------------------------
+
+# Source measure (length 1):
+#   lead: sound 1/4, rest 1/4, sound 1/2  -> [S, R, S]
+#   pad:  rest 1/2, rest 1/2              (different event count)
+#   twin: sound 1/4, rest 1/4, sound 1/2  (same measure, same rhythm)
+RHYTHM_SOURCE_PAYLOAD = {
+    "target_duration": "1",
+    "voices": [
+        {
+            "name": "lead",
+            "events": [
+                {"kind": "sound", "duration": "1/4"},
+                {"kind": "rest", "duration": "1/4"},
+                {"kind": "sound", "duration": "1/2"},
+            ],
+        },
+        {"name": "pad", "events": [
+            {"kind": "rest", "duration": "1/2"},
+            {"kind": "rest", "duration": "1/2"},
+        ]},
+        {
+            "name": "twin",
+            "events": [
+                {"kind": "sound", "duration": "1/4"},
+                {"kind": "rest", "duration": "1/4"},
+                {"kind": "sound", "duration": "1/2"},
+            ],
+        },
+    ],
+}
+
+# Candidate measure (length 2):
+#   echo: sound 1, sound 1/2, rest 1/2  -> lead doubled in tempo and
+#         cyclically shifted by 2 (candidate j = source (j+2) mod 3)
+#   lead: same *name* as the source but 4 events: name alone must not
+#         match, and only the source's own (measure, voice) is excluded.
+#   drone: rest 2                       (different event count)
+RHYTHM_CANDIDATE_PAYLOAD = {
+    "target_duration": "2",
+    "voices": [
+        {
+            "name": "echo",
+            "events": [
+                {"kind": "sound", "duration": "1"},
+                {"kind": "sound", "duration": "1/2"},
+                {"kind": "rest", "duration": "1/2"},
+            ],
+        },
+        {
+            "name": "lead",
+            "events": [
+                {"kind": "sound", "duration": "1/4"},
+                {"kind": "rest", "duration": "1/4"},
+                {"kind": "sound", "duration": "1/2"},
+                {"kind": "rest", "duration": "1"},
+            ],
+        },
+        {"name": "drone", "events": [{"kind": "rest", "duration": "2"}]},
+    ],
+}
+
+
+def test_rhythm_matches_returns_ratio_and_smallest_shift_in_order():
+    source_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    candidate_id = client.post("/measures", json=RHYTHM_CANDIDATE_PAYLOAD).json()["id"]
+
+    response = client.get(f"/measures/{source_id}/rhythm-matches", params={"voice": "lead"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["measure_id"] == source_id
+    assert body["voice"] == "lead"
+
+    # Ordered by measure id then the voices' original stored order; the
+    # source voice itself, "pad", "drone" and the same-named "lead" of
+    # the other measure do not appear.
+    assert body["matches"] == [
+        {"measure_id": source_id, "voice": "twin", "ratio": "1", "shift": 0},
+        {"measure_id": candidate_id, "voice": "echo", "ratio": "2", "shift": 2},
+    ]
+
+
+def test_rhythm_matches_empty_for_voice_without_equivalents():
+    # Five events with a distinct kind pattern: no other saved voice in
+    # the suite has five events, so no equivalent can exist even though
+    # the database is shared across tests.
+    payload = {
+        "target_duration": "1",
+        "voices": [
+            {
+                "name": "lonely",
+                "events": [
+                    {"kind": "sound", "duration": "1/5"},
+                    {"kind": "rest", "duration": "1/5"},
+                    {"kind": "sound", "duration": "1/5"},
+                    {"kind": "rest", "duration": "1/5"},
+                    {"kind": "rest", "duration": "1/5"},
+                ],
+            },
+            {"name": "filler", "events": [{"kind": "rest", "duration": "1"}]},
+        ],
+    }
+    source_id = client.post("/measures", json=payload).json()["id"]
+    response = client.get(
+        f"/measures/{source_id}/rhythm-matches", params={"voice": "lonely"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["matches"] == []
+
+
+def test_rhythm_matches_404_for_missing_measure_or_voice():
+    assert (
+        client.get("/measures/999999/rhythm-matches", params={"voice": "lead"}).status_code
+        == 404
+    )
+    source_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    response = client.get(
+        f"/measures/{source_id}/rhythm-matches", params={"voice": "nope"}
+    )
+    assert response.status_code == 404
+
+
+def test_rhythm_matches_requires_voice_query_parameter():
+    source_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    assert client.get(f"/measures/{source_id}/rhythm-matches").status_code == 422

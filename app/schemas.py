@@ -98,6 +98,26 @@ class GridOut(BaseModel):
     segments: list[SegmentOut]
 
 
+class RhythmMatchOut(BaseModel):
+    """One other voice rhythm-equivalent to the queried voice.
+
+    ratio = candidate duration / source duration (one common positive
+    rational for every event pair); shift is the cyclic offset such that
+    candidate event j corresponds to source event (j + shift) mod N.
+    """
+
+    measure_id: int
+    voice: str
+    ratio: str
+    shift: int
+
+
+class RhythmMatchesOut(BaseModel):
+    measure_id: int
+    voice: str
+    matches: list[RhythmMatchOut]
+
+
 class LoopAlignmentIn(BaseModel):
     """Two saved measure ids looped together; either id may repeat."""
 
