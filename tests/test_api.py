@@ -155,6 +155,162 @@ def test_unknown_measure_returns_404():
     assert client.get("/measures/999999/grid").status_code == 404
 
 
+# --- GET /measures/{id}/rhythm-matches --------------------------------------
+
+# Source voice "melody": sound 1/2, rest 1/8, sound 3/8 (target 1) — a
+# rhythm no other test in this module uses, so matches are exact.
+RHYTHM_SOURCE_PAYLOAD = {
+    "target_duration": "1",
+    "voices": [
+        {
+            "name": "melody",
+            "events": [
+                {"kind": "sound", "duration": "1/2"},
+                {"kind": "rest", "duration": "1/8"},
+                {"kind": "sound", "duration": "3/8"},
+            ],
+        },
+        {
+            "name": "bass",
+            "events": [
+                {"kind": "rest", "duration": "1/4"},
+                {"kind": "sound", "duration": "3/4"},
+            ],
+        },
+    ],
+}
+
+# Target 2: "lead" is the source rotated by one event and stretched by 2;
+# "pad" has a single event, so its count can never match.
+RHYTHM_SCALED_PAYLOAD = {
+    "target_duration": "2",
+    "voices": [
+        {
+            "name": "lead",
+            "events": [
+                {"kind": "rest", "duration": "1/4"},
+                {"kind": "sound", "duration": "3/4"},
+                {"kind": "sound", "duration": "1"},
+            ],
+        },
+        {
+            "name": "pad",
+            "events": [{"kind": "sound", "duration": "2"}],
+        },
+    ],
+}
+
+# Target 1: "copy" repeats the source rhythm exactly (ratio 1, shift 0).
+RHYTHM_COPY_PAYLOAD = {
+    "target_duration": "1",
+    "voices": [
+        {
+            "name": "copy",
+            "events": [
+                {"kind": "sound", "duration": "1/2"},
+                {"kind": "rest", "duration": "1/8"},
+                {"kind": "sound", "duration": "3/8"},
+            ],
+        },
+        {
+            "name": "drone",
+            "events": [{"kind": "rest", "duration": "1"}],
+        },
+    ],
+}
+
+
+def test_rhythm_matches_find_rotated_scaled_and_identical_voices():
+    source_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    scaled_id = client.post("/measures", json=RHYTHM_SCALED_PAYLOAD).json()["id"]
+    copy_id = client.post("/measures", json=RHYTHM_COPY_PAYLOAD).json()["id"]
+
+    response = client.get(
+        f"/measures/{source_id}/rhythm-matches", params={"voice": "melody"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["measure_id"] == source_id
+    assert body["voice"] == "melody"
+
+    # Ordered by measure id, then voice position; the source voice
+    # itself is excluded, and non-matching voices (bass, pad, drone)
+    # do not appear.
+    assert body["matches"] == [
+        {
+            "measure_id": scaled_id,
+            "voice": "lead",
+            "duration_ratio": "2",
+            "shift": 1,
+        },
+        {
+            "measure_id": copy_id,
+            "voice": "copy",
+            "duration_ratio": "1",
+            "shift": 0,
+        },
+    ]
+
+
+def test_rhythm_matches_exclude_only_the_source_voice_itself():
+    copy_id = client.post("/measures", json=RHYTHM_COPY_PAYLOAD).json()["id"]
+    source_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    response = client.get(
+        f"/measures/{copy_id}/rhythm-matches", params={"voice": "copy"}
+    )
+    assert response.status_code == 200, response.text
+    matches = response.json()["matches"]
+    # The identical "melody" voice of the other measure is found...
+    assert {
+        "measure_id": source_id,
+        "voice": "melody",
+        "duration_ratio": "1",
+        "shift": 0,
+    } in matches
+    # ...but the queried voice never matches itself.
+    assert not any(
+        match["measure_id"] == copy_id and match["voice"] == "copy"
+        for match in matches
+    )
+
+
+def test_rhythm_matches_empty_when_nothing_fits():
+    # Four events: no other voice in the test suite has that count.
+    payload = {
+        "target_duration": "1",
+        "voices": [
+            {
+                "name": "a",
+                "events": [
+                    {"kind": "sound", "duration": "1/4"},
+                    {"kind": "rest", "duration": "1/4"},
+                    {"kind": "sound", "duration": "1/4"},
+                    {"kind": "rest", "duration": "1/4"},
+                ],
+            },
+            {"name": "b", "events": [{"kind": "rest", "duration": "1"}]},
+        ],
+    }
+    measure_id = client.post("/measures", json=payload).json()["id"]
+    response = client.get(
+        f"/measures/{measure_id}/rhythm-matches", params={"voice": "a"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["matches"] == []
+
+
+def test_rhythm_matches_unknown_measure_or_voice_returns_404():
+    measure_id = client.post("/measures", json=RHYTHM_SOURCE_PAYLOAD).json()["id"]
+    response = client.get(
+        "/measures/999999/rhythm-matches", params={"voice": "melody"}
+    )
+    assert response.status_code == 404
+    response = client.get(
+        f"/measures/{measure_id}/rhythm-matches", params={"voice": "nobody"}
+    )
+    assert response.status_code == 404
+
+
 # --- POST /loop-alignments -------------------------------------------------
 
 # Loop B: length 3/2 (target 3/2), "bass" rests all the way through.

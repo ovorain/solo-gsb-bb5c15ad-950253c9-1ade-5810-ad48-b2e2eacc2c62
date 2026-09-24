@@ -5,7 +5,9 @@ with positive rational durations). Durations are accumulated as exact
 fractions; a voice that does not fill the target exactly is reported
 with its difference and nothing is saved. Valid measures are stored in
 SQLite and their beat grid — half-open segments over the union of all
-event boundaries — can be queried by id.
+event boundaries — can be queried by id. Voices whose rhythm is
+equivalent up to a cyclic shift and a uniform duration ratio can be
+found with GET /measures/{id}/rhythm-matches?voice={name}.
 
 Two saved measures can also be looped together (POST /loop-alignments):
 the service computes the first instant both loops restart together and
@@ -18,7 +20,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fractions import Fraction
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from . import db
 from .grid import (
@@ -29,6 +31,7 @@ from .grid import (
     compute_grid,
     format_rational,
     parse_rational,
+    rhythm_match,
     voice_total,
 )
 from .schemas import (
@@ -38,6 +41,7 @@ from .schemas import (
     MeasureIn,
     MeasureOut,
     Mismatch,
+    RhythmMatchesOut,
 )
 
 
@@ -65,6 +69,7 @@ def root() -> dict:
             "create_measure": "POST /measures",
             "get_measure": "GET /measures/{id}",
             "get_grid": "GET /measures/{id}/grid",
+            "rhythm_matches": "GET /measures/{id}/rhythm-matches?voice={name}",
             "loop_alignments": "POST /loop-alignments",
         },
     }
@@ -160,6 +165,46 @@ def get_grid(measure_id: int) -> dict:
             for segment in segments
         ],
     }
+
+
+@app.get("/measures/{measure_id}/rhythm-matches", response_model=RhythmMatchesOut)
+def rhythm_matches(measure_id: int, voice: str = Query(min_length=1)) -> dict:
+    measure = db.load_measure(measure_id)
+    if measure is None:
+        raise HTTPException(status_code=404, detail="measure not found")
+    source = next((v for v in measure["voices"] if v["name"] == voice), None)
+    if source is None:
+        raise HTTPException(status_code=404, detail="voice not found")
+
+    source_events = [
+        {"kind": event["kind"], "duration": Fraction(event["duration"])}
+        for event in source["events"]
+    ]
+    matches = []
+    for candidate_measure in db.load_all_measures():
+        for candidate_voice in candidate_measure["voices"]:
+            # The source voice itself is never its own match; other
+            # voices of the same measure are still considered.
+            if (
+                candidate_measure["id"] == measure_id
+                and candidate_voice["name"] == voice
+            ):
+                continue
+            candidate_events = [
+                {"kind": event["kind"], "duration": Fraction(event["duration"])}
+                for event in candidate_voice["events"]
+            ]
+            match = rhythm_match(source_events, candidate_events)
+            if match is not None:
+                matches.append(
+                    {
+                        "measure_id": candidate_measure["id"],
+                        "voice": candidate_voice["name"],
+                        "duration_ratio": format_rational(match["ratio"]),
+                        "shift": match["shift"],
+                    }
+                )
+    return {"measure_id": measure_id, "voice": voice, "matches": matches}
 
 
 @app.post("/loop-alignments", response_model=LoopAlignmentOut)

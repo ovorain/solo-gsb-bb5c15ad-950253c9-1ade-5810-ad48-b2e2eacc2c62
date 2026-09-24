@@ -13,6 +13,7 @@ from app.grid import (
     format_rational,
     parse_rational,
     rational_lcm,
+    rhythm_match,
     voice_total,
 )
 
@@ -140,6 +141,75 @@ class GridTest(unittest.TestCase):
         self.assertEqual(segments[0]["events"], {"x": "v1e1", "y": "v2e1"})
         self.assertEqual(segments[1]["events"], {"x": None, "y": "v2e1"})
         self.assertEqual(segments[2]["events"], {"x": None, "y": "v2e2"})
+
+
+class RhythmMatchTest(unittest.TestCase):
+    def events(self, specs):
+        """specs: [(kind, duration_str), ...] -> event dicts for matching."""
+        return [
+            {"kind": kind, "duration": parse_rational(duration)}
+            for kind, duration in specs
+        ]
+
+    def test_identical_rhythm_matches_with_zero_shift_and_ratio_one(self):
+        source = self.events([(KIND_SOUND, "1/2"), (KIND_REST, "1/4")])
+        candidate = self.events([(KIND_SOUND, "1/2"), (KIND_REST, "1/4")])
+        self.assertEqual(
+            rhythm_match(source, candidate),
+            {"shift": 0, "ratio": Fraction(1)},
+        )
+
+    def test_rotated_and_scaled_rhythm_matches(self):
+        # source:    sound 1/4, rest 1/4, sound 1/2
+        # candidate: rest 1/2, sound 1, sound 1/2  (= source rotated by
+        #            one event and stretched by 2)
+        source = self.events(
+            [(KIND_SOUND, "1/4"), (KIND_REST, "1/4"), (KIND_SOUND, "1/2")]
+        )
+        candidate = self.events(
+            [(KIND_REST, "1/2"), (KIND_SOUND, "1"), (KIND_SOUND, "1/2")]
+        )
+        # Candidate j pairs with source (j + 1) mod 3; every ratio is 2.
+        self.assertEqual(
+            rhythm_match(source, candidate),
+            {"shift": 1, "ratio": Fraction(2)},
+        )
+
+    def test_smallest_feasible_shift_wins(self):
+        # Constant-kind, constant-ratio source: every shift works.
+        source = self.events([(KIND_SOUND, "1/4")] * 4)
+        candidate = self.events([(KIND_SOUND, "1/8")] * 4)
+        self.assertEqual(
+            rhythm_match(source, candidate),
+            {"shift": 0, "ratio": Fraction(1, 2)},
+        )
+
+    def test_different_event_count_never_matches(self):
+        source = self.events([(KIND_SOUND, "1/2"), (KIND_REST, "1/2")])
+        candidate = self.events([(KIND_SOUND, "1")])
+        self.assertIsNone(rhythm_match(source, candidate))
+
+    def test_kind_mismatch_at_every_shift_rejects(self):
+        source = self.events([(KIND_SOUND, "1/2"), (KIND_REST, "1/2")])
+        candidate = self.events([(KIND_SOUND, "1/2"), (KIND_SOUND, "1/2")])
+        self.assertIsNone(rhythm_match(source, candidate))
+
+    def test_non_uniform_duration_ratio_rejects(self):
+        # Same kinds in the same order, but the stretch factor changes
+        # from pair to pair (2 then 3): not one single ratio.
+        source = self.events([(KIND_SOUND, "1/4"), (KIND_SOUND, "1/4")])
+        candidate = self.events([(KIND_SOUND, "1/2"), (KIND_SOUND, "3/4")])
+        self.assertIsNone(rhythm_match(source, candidate))
+
+    def test_exact_fraction_ratio_not_float(self):
+        # 1/3-based durations: exact Fraction comparison keeps the
+        # common ratio exact where floats would drift.
+        source = self.events([(KIND_SOUND, "1/3"), (KIND_REST, "1/6")])
+        candidate = self.events([(KIND_REST, "1/3"), (KIND_SOUND, "2/3")])
+        self.assertEqual(
+            rhythm_match(source, candidate),
+            {"shift": 1, "ratio": Fraction(2)},
+        )
 
 
 class RationalLcmTest(unittest.TestCase):

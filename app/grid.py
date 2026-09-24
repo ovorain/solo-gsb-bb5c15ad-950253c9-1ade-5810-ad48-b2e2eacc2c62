@@ -130,6 +130,41 @@ def compute_grid(voices: list[dict]) -> list[dict]:
     return segments
 
 
+def rhythm_match(source: list[dict], candidate: list[dict]) -> dict | None:
+    """Cyclic-shift rhythm equivalence between two event sequences.
+
+    ``source`` / ``candidate`` are event lists with ``kind`` and a
+    ``Fraction`` ``duration``. A match requires the same event count N
+    and some cyclic shift s — candidate event j paired with source event
+    (j + s) mod N — such that kinds agree pairwise and every duration
+    ratio candidate[j] / source[(j + s) mod N] is one identical positive
+    rational. All comparisons are exact Fraction arithmetic. Returns
+    {"shift": s, "ratio": Fraction} with the smallest feasible shift,
+    or None when no shift works.
+    """
+    count = len(source)
+    if count == 0 or len(candidate) != count:
+        return None
+    for shift in range(count):
+        ratio: Fraction | None = None
+        for j in range(count):
+            src = source[(j + shift) % count]
+            cand = candidate[j]
+            if cand["kind"] != src["kind"]:
+                break
+            current = cand["duration"] / src["duration"]
+            if ratio is None:
+                ratio = current
+            elif current != ratio:
+                break
+        else:
+            # Inner loop completed: every pair matched at this shift.
+            # Durations are positive, so the common ratio is too.
+            assert ratio is not None
+            return {"shift": shift, "ratio": ratio}
+    return None
+
+
 def rational_lcm(left: Fraction, right: Fraction) -> Fraction:
     """Least positive common multiple of two positive rationals.
 

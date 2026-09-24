@@ -91,6 +91,33 @@ curl -s -X POST http://localhost:8000/measures \
 }
 ```
 
+### `GET /measures/{id}/rhythm-matches?voice={声部名}` — 检索节奏等价声部
+
+在**所有已保存小节**中查找与指定声部节奏等价的其他声部。两段声部事件数相同（记为 N），
+且存在某个**循环位移** s：候选第 j 个事件对应源第 `(j+s) mod N` 个事件，发声/休止类型
+逐项一致，并且各对应时长之比（**候选/源**）是**同一个正有理数**时即为匹配；全程用
+`fractions.Fraction` 精确比较，无浮点误差。存在多个可行位移时取**最小**的 s。
+
+```bash
+curl -s "http://localhost:8000/measures/1/rhythm-matches?voice=melody"
+```
+
+- 结果按**小节 ID、声部原顺序**排列，**排除源声部本身**（同小节的其它声部仍参与匹配）；
+  每条匹配给出候选小节 ID、声部名、时长比例 `duration_ratio`（候选/源）和位移 `shift`：
+
+```json
+{
+  "measure_id": 1,
+  "voice": "melody",
+  "matches": [
+    {"measure_id": 2, "voice": "lead", "duration_ratio": "2", "shift": 1},
+    {"measure_id": 3, "voice": "copy", "duration_ratio": "1", "shift": 0}
+  ]
+}
+```
+
+- 源小节不存在或声部名不存在时返回 **404**；没有匹配时 `matches` 为空数组。
+
 ### `POST /loop-alignments` — 两小节循环对齐（排练用）
 
 接收两个**已保存小节**的 ID（同一小节可同时作为 A、B），把它们当作两条不同长度的

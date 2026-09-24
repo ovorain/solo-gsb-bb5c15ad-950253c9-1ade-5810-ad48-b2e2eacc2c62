@@ -102,6 +102,44 @@ def insert_measure(target: str, voices: list[dict]) -> int:
         return measure_id
 
 
+def load_all_measures() -> list[dict]:
+    """Load every saved measure's rhythm skeleton.
+
+    Measures come back ordered by id, voices by their stored position —
+    exactly the order rhythm-match results are reported in. Each voice
+    carries only what matching needs: ordered (kind, duration) pairs.
+    """
+    with closing(connect()) as conn:
+        measures = conn.execute(
+            "SELECT id FROM measures ORDER BY id"
+        ).fetchall()
+        result = []
+        for measure in measures:
+            voices = conn.execute(
+                "SELECT id, name FROM voices "
+                "WHERE measure_id = ? ORDER BY position",
+                (measure["id"],),
+            ).fetchall()
+            result_voices = []
+            for voice in voices:
+                events = conn.execute(
+                    "SELECT kind, duration FROM events "
+                    "WHERE voice_id = ? ORDER BY position",
+                    (voice["id"],),
+                ).fetchall()
+                result_voices.append(
+                    {
+                        "name": voice["name"],
+                        "events": [
+                            {"kind": event["kind"], "duration": event["duration"]}
+                            for event in events
+                        ],
+                    }
+                )
+            result.append({"id": measure["id"], "voices": result_voices})
+        return result
+
+
 def load_measure(measure_id: int) -> dict | None:
     """Load a measure with voices and events, ordered by position."""
     with closing(connect()) as conn:
